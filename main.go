@@ -22,7 +22,6 @@ var db *mgo.Database
 const (
 	hostName       string = "localhost:27017"
 	dbName         string = "demo_todo"
-	collectionName string = "todo"
 	port           string = ":9000"
 )
 
@@ -40,6 +39,20 @@ type (
 		Completed bool      `json:"completed"`
 		CreatedAt time.Time `json:"created_at"`
 	}
+
+	postModel struct {
+		ID 		  bson.ObjectId   `bson:"_id,omitempty"`
+		Title	  string		  `bson:"title"`
+		Body	  string		  `bson:"body"`
+		CreatedAt time.Time		  `bson:"createdAt"`
+	}
+
+	post struct {
+		ID		  string		  `json:"id"`
+		Title	  string		  `json:"title"`
+		Body	  string		  `json:"body"`
+		CreatedAt time.Time		  `json:"createdAt"`
+	}
 )
 
 func init() {
@@ -55,6 +68,11 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 	checkErr(err)
 }
 
+func blogHandler(w http.ResponseWriter, r *http.Request) {
+	err := rnd.Template(w, http.StatusOK, []string{"blog.html"}, nil)
+	checkErr(err)
+}
+
 func main() {
 	stopChan := make(chan os.Signal)
 	signal.Notify(stopChan, os.Interrupt)
@@ -62,8 +80,10 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Get("/", homeHandler)
+	r.Get("/blog", blogHandler)
 
 	r.Mount("/todo", todoHandlers())
+	r.Mount("/post", postHandlers())
 
 	srv := &http.Server{
 		Addr: port,
@@ -86,6 +106,16 @@ func main() {
 	srv.Shutdown(ctx)
 	defer cancel()
 	log.Println("Server gracefully stopped!")
+}
+
+func postHandlers() http.Handler {
+	rg := chi.NewRouter()
+
+	rg.Group(func(r chi.Router) {
+		r.Get("/post", fetchPosts)
+	})
+
+	return rg
 }
 
 func todoHandlers() http.Handler {
@@ -126,7 +156,7 @@ func createTodo(w http.ResponseWriter, r *http.Request) {
 		Completed: false,
 		CreatedAt: time.Now(),
 	}
-	if err := db.C(collectionName).Insert(&tm); err != nil {
+	if err := db.C("todo").Insert(&tm); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to save todo",
 			"error":   err,
@@ -166,7 +196,7 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// if input is okay, update a todo
-	if err := db.C(collectionName).
+	if err := db.C("todo").
 		Update(
 		bson.M{"_id": bson.ObjectIdHex(id)},
 		bson.M{"title": t.Title, "completed": t.Completed},
@@ -184,7 +214,7 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 func toggleAllTodos(w http.ResponseWriter, r *http.Request) {
-	if _, err := db.C(collectionName).UpdateAll(bson.M{}, bson.M{"$set": bson.M{"completed": true}}); err != nil {
+	if _, err := db.C("todo").UpdateAll(bson.M{}, bson.M{"$set": bson.M{"completed": true}}); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to toggle todos",
 			"error": err,
@@ -200,7 +230,7 @@ func toggleAllTodos(w http.ResponseWriter, r *http.Request) {
 func fetchTodos(w http.ResponseWriter, r *http.Request) {
 	todos := []todoModel{}
 
-	if err := db.C(collectionName).
+	if err := db.C("todo").
 		Find(bson.M{}).
 		All(&todos); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
@@ -225,6 +255,35 @@ func fetchTodos(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func fetchPosts(w http.ResponseWriter, r *http.Request) {
+	posts := []postModel{}
+
+	if err := db.C("post").
+		Find(bson.M{}).
+		All(&posts); err != nil {
+			rnd.JSON(w, http.StatusProcessing, renderer.M{
+				"message": "Failed to fetch posts",
+				"err": err,
+		})
+		return
+	}
+
+	postList := []post{}
+
+	for _, p := range posts {
+		postList = append(postList, post{
+			ID: p.ID.Hex(),
+			Title: p.Title,
+			Body: p.Body,
+			CreatedAt: p.CreatedAt,
+		})
+	}
+
+	rnd.JSON(w, http.StatusOK, renderer.M{
+		"data": postList,
+	})
+}
+
 func deleteTodo(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(chi.URLParam(r, "id"))
 
@@ -235,7 +294,7 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := db.C(collectionName).RemoveId(bson.ObjectIdHex(id)); err != nil {
+	if err := db.C("todo").RemoveId(bson.ObjectIdHex(id)); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to delete todo",
 			"error":   err,
@@ -249,10 +308,10 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteAllTodos(w http.ResponseWriter, r *http.Request) {
-	if info, err := db.C(collectionName).RemoveAll(bson.M{}); err != nil {
+	if _, err := db.C("todo").RemoveAll(bson.M{}); err != nil {
 		rnd.JSON(w, http.StatusProcessing, renderer.M{
 			"message": "Failed to delete all todos",
-			"error": info.Removed,
+			"error": err,
 		})
 
 		return
